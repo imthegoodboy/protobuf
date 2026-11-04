@@ -20,15 +20,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: bench-python-remove
-          fetch-depth: 3
+          fetch-depth: 1
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Save both variants of the native sources
         run: |
-          # HEAD = bench commit, HEAD^ = PR head (merge), HEAD^^2 = upstream main.
+          git fetch -q --depth=1 origin ae21a0685700f32b162b9e5c0fd12e40dfbece7f f5ecb6c507d00ef7fce33412cab24d3ffdc23bdd
           for v in main pr; do
-            [ $v = main ] && rev=HEAD^^2 || rev=HEAD^
+            [ $v = main ] && rev=ae21a0685700f32b162b9e5c0fd12e40dfbece7f || rev=f5ecb6c507d00ef7fce33412cab24d3ffdc23bdd
             for f in $NATIVE; do
               mkdir -p /tmp/src/$v/$(dirname $f)
               git show $rev:$f > /tmp/src/$v/$f

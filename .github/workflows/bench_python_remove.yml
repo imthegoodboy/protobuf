@@ -1,0 +1,87 @@
+name: Benchmark Python repeated remove()
+
+on:
+  push:
+    branches: [bench-python-remove-v2]
+
+permissions:
+  contents: read
+
+env:
+  USE_BAZEL_VERSION: 8.7.0
+  FLAGS: --//python:use_hermetic_python=true --@rules_python//python/config_settings:python_version=3.12
+  OPT: -c opt --copt=-Wno-error=array-bounds --copt=-Wno-error=maybe-uninitialized --copt=-Wno-error=deprecated-declarations
+  NATIVE: python/repeated.c python/google/protobuf/pyext/repeated_scalar_container.cc python/google/protobuf/pyext/repeated_composite_container.cc
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bench-python-remove-v2
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Save both variants of the native sources
+        run: |
+          git fetch -q --depth=1 origin ae21a0685700f32b162b9e5c0fd12e40dfbece7f 54227d784cb6e59280e73091b8a8a87dac7bc01a
+          for v in main pr; do
+            [ $v = main ] && rev=ae21a0685700f32b162b9e5c0fd12e40dfbece7f || rev=54227d784cb6e59280e73091b8a8a87dac7bc01a
+            for f in $NATIVE; do
+              mkdir -p /tmp/src/$v/$(dirname $f)
+              git show $rev:$f > /tmp/src/$v/$f
+            done
+          done
+          diff -r /tmp/src/main /tmp/src/pr | head -80 || true
+      - name: Build upb wheels for both variants
+        run: |
+          set -ex
+          for v in main pr; do
+            cp -r /tmp/src/$v/python/. python/
+            bazel build //python/dist:source_wheel //python/dist:test_wheel $FLAGS
+            python -m venv /tmp/env_$v
+            /tmp/env_$v/bin/pip install -q -r python/requirements.txt
+            mkdir -p /tmp/sdist_$v && tar -xzf bazel-bin/python/dist/protobuf-*.tar.gz -C /tmp/sdist_$v
+            /tmp/env_$v/bin/pip install -q /tmp/sdist_$v/protobuf-*/
+            /tmp/env_$v/bin/pip install -q bazel-bin/python/dist/protobuftests-*.whl
+          done
+      - name: Build C++ backend (opt)
+        run: bazel build $OPT //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS
+      - name: Benchmark (alternating main/pr, 3 rounds)
+        run: |
+          set -eo pipefail
+          cp python/remove_bench.py /tmp/remove_bench.py
+          for round in 1 2 3; do
+            for v in main pr; do
+              cp -r /tmp/src/$v/python/. python/
+              bazel run $OPT //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS --ui_event_filters=-info,-stdout,-stderr --noshow_progress -- --label "$v r$round" | grep BENCH
+              (cd /tmp && /tmp/env_$v/bin/python -I /tmp/remove_bench.py --label "$v r$round")
+            done
+          done | tee /tmp/bench.txt
+      - name: Tests (v2, all backends)
+        run: |
+          set -eo pipefail
+          cp -r /tmp/src/pr/python/. python/
+          bazel test $OPT //python:reflection_test --define=use_fast_cpp_protos=false $FLAGS --test_output=errors
+          bazel test $OPT //python:reflection_test --define=use_fast_cpp_protos=true $FLAGS --test_output=errors
+          cd /tmp && /tmp/env_pr/bin/python -I -c 'from google.protobuf.internal import api_implementation as a; assert a.Type() == "upb", a.Type()'
+          /tmp/env_pr/bin/python -I -m unittest google.protobuf.internal.reflection_test 2>&1 | tail -4
+
+      - name: Summary
+        run: |
+          python3 - <<'PY' | tee -a $GITHUB_STEP_SUMMARY
+          import collections, re
+          best = collections.defaultdict(lambda: float('inf'))
+          for line in open('/tmp/bench.txt'):
+            m = re.match(r'BENCH (\w+) r\d+ impl=(\w+) (\w+) ([\d.]+) us/call', line)
+            if m:
+              v, impl, name, us = m.group(1), m.group(2), m.group(3), float(m.group(4))
+              best[(impl, name, v)] = min(best[(impl, name, v)], us)
+          print('| backend | case | main (us/call) | PR (us/call) | change |')
+          print('|---|---|---|---|---|')
+          for impl, name in sorted({(k[0], k[1]) for k in best}):
+            a, b = best[(impl, name, 'main')], best[(impl, name, 'pr')]
+            print('| %s | %s | %.2f | %.2f | %+.1f%% |' % (impl, name, a, b, (b / a - 1) * 100))
+          PY

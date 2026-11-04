@@ -10,6 +10,7 @@ permissions:
 env:
   USE_BAZEL_VERSION: 8.7.0
   FLAGS: --//python:use_hermetic_python=true --@rules_python//python/config_settings:python_version=3.12
+  OPT: -c opt --copt=-Wno-error=array-bounds --copt=-Wno-error=maybe-uninitialized --copt=-Wno-error=deprecated-declarations
   NATIVE: python/repeated.c python/google/protobuf/pyext/repeated_scalar_container.cc python/google/protobuf/pyext/repeated_composite_container.cc
 
 jobs:
@@ -47,13 +48,13 @@ jobs:
             /tmp/env_$v/bin/pip install -q bazel-bin/python/dist/protobuftests-*.whl
           done
       - name: Build C++ backend (opt)
-        run: bazel build -c opt //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS
+        run: bazel build $OPT //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS
       - name: Benchmark (alternating main/pr, 3 rounds)
         run: |
           for round in 1 2 3; do
             for v in main pr; do
               cp -r /tmp/src/$v/python/. python/
-              bazel run -c opt //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS --ui_event_filters=-info,-stdout,-stderr --noshow_progress -- --label "$v r$round" | grep BENCH
+              bazel run $OPT //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS --ui_event_filters=-info,-stdout,-stderr --noshow_progress -- --label "$v r$round" | grep BENCH
               (cd /tmp && /tmp/env_$v/bin/python $GITHUB_WORKSPACE/python/remove_bench.py --label "$v r$round")
             done
           done | tee /tmp/bench.txt

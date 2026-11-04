@@ -51,11 +51,13 @@ jobs:
         run: bazel build $OPT //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS
       - name: Benchmark (alternating main/pr, 3 rounds)
         run: |
+          set -eo pipefail
+          cp python/remove_bench.py /tmp/remove_bench.py
           for round in 1 2 3; do
             for v in main pr; do
               cp -r /tmp/src/$v/python/. python/
               bazel run $OPT //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS --ui_event_filters=-info,-stdout,-stderr --noshow_progress -- --label "$v r$round" | grep BENCH
-              (cd /tmp && /tmp/env_$v/bin/python $GITHUB_WORKSPACE/python/remove_bench.py --label "$v r$round")
+              (cd /tmp && /tmp/env_$v/bin/python -I /tmp/remove_bench.py --label "$v r$round")
             done
           done | tee /tmp/bench.txt
       - name: Summary

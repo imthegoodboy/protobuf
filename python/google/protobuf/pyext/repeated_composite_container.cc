@@ -272,9 +272,11 @@ static PyObject* Remove(PyObject* pself, PyObject* value) {
     return nullptr;
   }
 
+  Py_ssize_t len = Length(reinterpret_cast<PyObject*>(self));
+
   // The comparison can run arbitrary Python code that modifies this container,
-  // so the length is re-read on every iteration and again before deleting.
-  for (Py_ssize_t i = 0; i < Length(pself); i++) {
+  // so GetItem() must check `i` against the current length rather than `len`.
+  for (Py_ssize_t i = 0; i < len; i++) {
     ScopedPyObjectPtr item(GetItem(self, i));
     if (item == nullptr) {
       return nullptr;

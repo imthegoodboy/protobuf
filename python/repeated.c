@@ -970,9 +970,11 @@ static PyObject* PyUpb_RepeatedContainer_Remove(PyObject* _self,
   upb_Array* arr = PyUpb_RepeatedContainer_AssureWritable(_self);
   if (!arr) return NULL;
   Py_ssize_t match_index = -1;
-  // The comparison can run arbitrary Python code that modifies this container,
-  // so the length is re-read on every iteration and again before deleting.
-  for (Py_ssize_t i = 0; i < PyUpb_RepeatedContainer_Length(_self); ++i) {
+  // The comparison can run arbitrary Python code that modifies this container.
+  // Item() checks `i` against the current length, so a container that shrinks
+  // mid-scan raises IndexError rather than being read out of range.
+  Py_ssize_t n = PyUpb_RepeatedContainer_Length(_self);
+  for (Py_ssize_t i = 0; i < n; ++i) {
     PyObject* elem = PyUpb_RepeatedContainer_Item(_self, i);
     if (!elem) return NULL;
     int eq = PyObject_RichCompareBool(elem, value, Py_EQ);

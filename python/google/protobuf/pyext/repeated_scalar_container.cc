@@ -1062,9 +1062,10 @@ static PyObject* Remove(PyObject* pself, PyObject* value) {
   }
 
   Py_ssize_t match_index = -1;
-  // The comparison can run arbitrary Python code that modifies this container,
-  // so the length is re-read on every iteration and again before deleting.
-  for (Py_ssize_t i = 0; i < Len(pself); ++i) {
+  // The comparison can run arbitrary Python code that modifies this container.
+  // Item() checks `i` against the current length, so a container that shrinks
+  // mid-scan raises IndexError rather than being read out of range.
+  for (Py_ssize_t i = 0, len = Len(pself); i < len; ++i) {
     ScopedPyObjectPtr elem(Item(pself, i));
     if (elem == nullptr) {
       return nullptr;

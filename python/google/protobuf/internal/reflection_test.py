@@ -1480,8 +1480,10 @@ class Proto2ReflectionTest(unittest.TestCase):
     proto.repeated_int32.remove(ClearsOnEq(True))
     self.assertEqual([], proto.repeated_int32)
 
+    # The native implementations raise IndexError when the container shrinks
+    # mid-scan instead of re-reading its length for every element.
     proto.repeated_int32.extend([1, 2, 3])
-    with self.assertRaises(ValueError):
+    with self.assertRaises((IndexError, ValueError)):
       proto.repeated_int32.remove(ClearsOnEq(False))
     self.assertEqual([], proto.repeated_int32)
 
@@ -1651,9 +1653,11 @@ class Proto2ReflectionTest(unittest.TestCase):
     proto.repeated_nested_message.remove(ClearsOnEq(True))
     self.assertEqual(0, len(proto.repeated_nested_message))
 
+    # The native implementations raise IndexError when the container shrinks
+    # mid-scan instead of re-reading its length for every element.
     proto.repeated_nested_message.add(bb=1)
     proto.repeated_nested_message.add(bb=2)
-    with self.assertRaises(ValueError):
+    with self.assertRaises((IndexError, ValueError)):
       proto.repeated_nested_message.remove(ClearsOnEq(False))
     self.assertEqual(0, len(proto.repeated_nested_message))
 

@@ -1,0 +1,75 @@
+name: Benchmark Python repeated remove()
+
+on:
+  push:
+    branches: [bench-python-remove]
+
+permissions:
+  contents: read
+
+env:
+  USE_BAZEL_VERSION: 8.7.0
+  FLAGS: --//python:use_hermetic_python=true --@rules_python//python/config_settings:python_version=3.12
+  NATIVE: python/repeated.c python/google/protobuf/pyext/repeated_scalar_container.cc python/google/protobuf/pyext/repeated_composite_container.cc
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bench-python-remove
+          fetch-depth: 3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Save both variants of the native sources
+        run: |
+          # HEAD = bench commit, HEAD^ = PR head (merge), HEAD^^2 = upstream main.
+          for v in main pr; do
+            [ $v = main ] && rev=HEAD^^2 || rev=HEAD^
+            for f in $NATIVE; do
+              mkdir -p /tmp/src/$v/$(dirname $f)
+              git show $rev:$f > /tmp/src/$v/$f
+            done
+          done
+          diff -r /tmp/src/main /tmp/src/pr | head -80 || true
+      - name: Build upb wheels for both variants
+        run: |
+          set -ex
+          for v in main pr; do
+            cp -r /tmp/src/$v/python/. python/
+            bazel build //python/dist:source_wheel //python/dist:test_wheel $FLAGS
+            python -m venv /tmp/env_$v
+            /tmp/env_$v/bin/pip install -q -r python/requirements.txt
+            mkdir -p /tmp/sdist_$v && tar -xzf bazel-bin/python/dist/protobuf-*.tar.gz -C /tmp/sdist_$v
+            /tmp/env_$v/bin/pip install -q /tmp/sdist_$v/protobuf-*/
+            /tmp/env_$v/bin/pip install -q bazel-bin/python/dist/protobuftests-*.whl
+          done
+      - name: Build C++ backend (opt)
+        run: bazel build -c opt //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS
+      - name: Benchmark (alternating main/pr, 3 rounds)
+        run: |
+          for round in 1 2 3; do
+            for v in main pr; do
+              cp -r /tmp/src/$v/python/. python/
+              bazel run -c opt //python:remove_bench --define=use_fast_cpp_protos=true $FLAGS --ui_event_filters=-info,-stdout,-stderr --noshow_progress -- --label "$v r$round" | grep BENCH
+              (cd /tmp && /tmp/env_$v/bin/python $GITHUB_WORKSPACE/python/remove_bench.py --label "$v r$round")
+            done
+          done | tee /tmp/bench.txt
+      - name: Summary
+        run: |
+          python3 - <<'PY' | tee -a $GITHUB_STEP_SUMMARY
+          import collections, re
+          best = collections.defaultdict(lambda: float('inf'))
+          for line in open('/tmp/bench.txt'):
+            m = re.match(r'BENCH (\w+) r\d+ impl=(\w+) (\w+) ([\d.]+) us/call', line)
+            if m:
+              v, impl, name, us = m.group(1), m.group(2), m.group(3), float(m.group(4))
+              best[(impl, name, v)] = min(best[(impl, name, v)], us)
+          print('| backend | case | main (us/call) | PR (us/call) | change |')
+          print('|---|---|---|---|---|')
+          for impl, name in sorted({(k[0], k[1]) for k in best}):
+            a, b = best[(impl, name, 'main')], best[(impl, name, 'pr')]
+            print('| %s | %s | %.2f | %.2f | %+.1f%% |' % (impl, name, a, b, (b / a - 1) * 100))
+          PY
